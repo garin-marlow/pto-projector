@@ -1,0 +1,15 @@
+{
+  "files": {
+    "main.css": "/pto-projector/static/css/main.34451db6.css",
+    "main.js": "/pto-projector/static/js/main.840bb9e6.js",
+    "static/js/453.fa50f195.chunk.js": "/pto-projector/static/js/453.fa50f195.chunk.js",
+    "index.html": "/pto-projector/index.html",
+    "main.34451db6.css.map": "/pto-projector/static/css/main.34451db6.css.map",
+    "main.840bb9e6.js.map": "/pto-projector/static/js/main.840bb9e6.js.map",
+    "453.fa50f195.chunk.js.map": "/pto-projector/static/js/453.fa50f195.chunk.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.34451db6.css",
+    "static/js/main.840bb9e6.js"
+  ]
+}
