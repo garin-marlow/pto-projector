@@ -61,9 +61,9 @@ This section has moved here: [https://facebook.github.io/create-react-app/docs/m
 
 This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
 
-### Deployment
+### `npm run deploy` Deployment
+Deploys the application to a hosting service like GitHub Pages. This command first builds the application for production and then pushes the contents of the build directory to the gh-pages branch on your GitHub repository.
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
 
 ### `npm run build` fails to minify
 
