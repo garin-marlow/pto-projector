@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 
 // Helper to format date as<y_bin_413>-MM-DD
 const formatDate = (date) => {
@@ -27,25 +27,106 @@ const parseDateStr = (dateStr) => {
 };
 
 
-// --- Holiday Data ---
-// Using a Set for efficient O(1) lookups. Note: These are for 2025.
-const holidays2025 = new Set([
-    '2025-01-01', // New Year's Day
-    '2025-01-20', // Martin Luther King, Jr. Day
-    '2025-05-26', // Memorial Day
-    '2025-06-19', // Juneteenth
-    '2025-07-04', // Independence Day
-    '2025-09-01', // Labor Day
-    '2025-11-27', // Thanksgiving
-    '2025-11-28', // Native American Heritage Day
-    '2025-12-24', // Christmas Eve
-    '2025-12-25', // Christmas Day
-]);
+// --- Holiday Rules ---
+// Holidays are defined as recurring rules (rather than fixed dates) so they
+// automatically apply every year. Update this list with the official
+// PunchThrough holiday schedule.
+// TODO: Confirm/update this list with the official PunchThrough holidays.
+const HOLIDAY_RULES = [
+    { name: "New Year's Day", type: 'fixed', month: 1, day: 1 },
+    { name: 'Martin Luther King, Jr. Day', type: 'nthWeekday', month: 1, weekday: 1, n: 3 }, // 3rd Monday of January
+    { name: 'Memorial Day', type: 'lastWeekday', month: 5, weekday: 1 }, // Last Monday of May
+    { name: 'Juneteenth', type: 'fixed', month: 6, day: 19 },
+    { name: 'Independence Day', type: 'fixed', month: 7, day: 4 },
+    { name: 'Labor Day', type: 'nthWeekday', month: 9, weekday: 1, n: 1 }, // 1st Monday of September
+    { name: 'Thanksgiving', type: 'nthWeekday', month: 11, weekday: 4, n: 4 }, // 4th Thursday of November
+    { name: 'Native American Heritage Day', type: 'nthWeekday', month: 11, weekday: 5, n: 4 }, // Day after Thanksgiving
+    { name: 'Christmas Eve', type: 'fixed', month: 12, day: 24 },
+    { name: 'Christmas Day', type: 'fixed', month: 12, day: 25 },
+];
 
-const formattedHolidays = Array.from(holidays2025).map(dateStr => {
-    const date = parseDateStr(dateStr);
-    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-}).join(', ');
+// Returns the Nth occurrence of `weekday` (0=Sun...6=Sat) in the given month/year.
+const getNthWeekdayOfMonth = (year, month, weekday, n) => {
+    const date = new Date(year, month - 1, 1);
+    let count = 0;
+    while (date.getMonth() === month - 1) {
+        if (date.getDay() === weekday) {
+            count++;
+            if (count === n) return new Date(date);
+        }
+        date.setDate(date.getDate() + 1);
+    }
+    return null;
+};
+
+// Returns the last occurrence of `weekday` (0=Sun...6=Sat) in the given month/year.
+const getLastWeekdayOfMonth = (year, month, weekday) => {
+    const date = new Date(year, month, 0); // last day of the month
+    while (date.getDay() !== weekday) {
+        date.setDate(date.getDate() - 1);
+    }
+    return date;
+};
+
+// Resolves each holiday rule to a concrete { name, date } for a given year.
+const generateHolidaysForYear = (year) => {
+    const results = [];
+    for (const rule of HOLIDAY_RULES) {
+        let date = null;
+        if (rule.type === 'fixed') {
+            date = new Date(year, rule.month - 1, rule.day);
+        } else if (rule.type === 'nthWeekday') {
+            date = getNthWeekdayOfMonth(year, rule.month, rule.weekday, rule.n);
+        } else if (rule.type === 'lastWeekday') {
+            date = getLastWeekdayOfMonth(year, rule.month, rule.weekday);
+        }
+        if (date) {
+            results.push({ name: rule.name, date });
+        }
+    }
+    return results.sort((a, b) => a.date.getTime() - b.date.getTime());
+};
+
+// Builds a Set of 'YYYY-MM-DD' strings for every holiday across a range of years,
+// so calendar navigation into past/future years reflects recurring holidays.
+const generateHolidaySetForYearRange = (startYear, endYear) => {
+    const set = new Set();
+    for (let year = startYear; year <= endYear; year++) {
+        for (const { date } of generateHolidaysForYear(year)) {
+            set.add(formatDate(date));
+        }
+    }
+    return set;
+};
+
+
+// --- Accrual Tiers ---
+// Maps years of tenure at PunchThrough to PTO/Sick accrual rates (hours earned per
+// hour worked) and the PTO max balance cap for that tier. Salary employees accrue
+// the same annual total as Hourly (just paid out per pay period instead of per
+// hour worked), so both use the same effective rate here. Sick accrual (1 hour
+// per 30 hours worked) is the same across all tenures.
+const ACCRUAL_TIERS = [
+    { id: '0-2', label: '0-2 Years', ptoRatePerHour: (100 / 2081).toFixed(4), sickRatePerHour: (1 / 30).toFixed(4), maxPto: 150 },
+    { id: '2-4', label: '2-4 Years', ptoRatePerHour: (140 / 2081).toFixed(4), sickRatePerHour: (1 / 30).toFixed(4), maxPto: 210 },
+    { id: '4+', label: '4+ Years', ptoRatePerHour: (180 / 2081).toFixed(4), sickRatePerHour: (1 / 30).toFixed(4), maxPto: 270 },
+];
+
+
+// --- Persistence (localStorage) ---
+// Saves/restores balances, rates, and selected dates so users don't need to
+// re-enter everything each time they open the tool.
+const STORAGE_KEY = 'pto-projector-state';
+
+const loadStoredState = () => {
+    try {
+        const raw = window.localStorage.getItem(STORAGE_KEY);
+        if (!raw) return null;
+        return JSON.parse(raw);
+    } catch {
+        return null;
+    }
+};
 
 
 // --- Helper to calculate workdays ---
@@ -163,12 +244,17 @@ const Calendar = ({ selectedDates, onDateSelect, month, year, setMonth, setYear,
 
 // --- Main App Component ---
 export default function App() {
+    // Load any previously saved state once on mount (before state initialization).
+    const storedStateRef = useRef(loadStoredState());
+    const storedState = storedStateRef.current || {};
+
     // --- State Management ---
-    const [currentPto, setCurrentPto] = useState("80");
-    const [currentSick, setCurrentSick] = useState("40");
-    const [ptoRatePerHour, setPtoRatePerHour] = useState((140 / 2081).toFixed(4)); 
-    const [sickRatePerHour, setSickRatePerHour] = useState((1 / 30).toFixed(4));
-    const [selectedDates, setSelectedDates] = useState(new Set());
+    const [currentPto, setCurrentPto] = useState(storedState.currentPto ?? "80");
+    const [currentSick, setCurrentSick] = useState(storedState.currentSick ?? "40");
+    const [ptoRatePerHour, setPtoRatePerHour] = useState(storedState.ptoRatePerHour ?? ACCRUAL_TIERS[0].ptoRatePerHour);
+    const [sickRatePerHour, setSickRatePerHour] = useState(storedState.sickRatePerHour ?? ACCRUAL_TIERS[0].sickRatePerHour);
+    const [selectedTier, setSelectedTier] = useState(storedState.selectedTier ?? ACCRUAL_TIERS[0].id);
+    const [selectedDates, setSelectedDates] = useState(() => new Set(storedState.selectedDates ?? []));
     
     const today = useMemo(() => {
         const d = new Date();
@@ -180,7 +266,46 @@ export default function App() {
     const [month, setMonth] = useState(today.getMonth());
     const [year, setYear] = useState(today.getFullYear());
 
+    // Recurring holidays, generated for a wide range of years so navigating the
+    // calendar into past/future years still reflects the correct holidays.
+    const holidaySet = useMemo(
+        () => generateHolidaySetForYearRange(today.getFullYear() - 1, today.getFullYear() + 10),
+        [today]
+    );
+
+    const holidayList = useMemo(() => {
+        return generateHolidaysForYear(today.getFullYear())
+            .map(({ name, date }) => ({ name, label: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) }));
+    }, [today]);
+
+    // Persist balances, rates, and selected dates so users don't have to re-enter them.
+    useEffect(() => {
+        const stateToStore = {
+            currentPto,
+            currentSick,
+            ptoRatePerHour,
+            sickRatePerHour,
+            selectedTier,
+            selectedDates: Array.from(selectedDates),
+        };
+        try {
+            window.localStorage.setItem(STORAGE_KEY, JSON.stringify(stateToStore));
+        } catch {
+            // Ignore storage errors (e.g., private browsing with storage disabled)
+        }
+    }, [currentPto, currentSick, ptoRatePerHour, sickRatePerHour, selectedTier, selectedDates]);
+
     // --- Event Handlers ---
+    const handleAccrualTierChange = (e) => {
+        const tierId = e.target.value;
+        setSelectedTier(tierId);
+        const tier = ACCRUAL_TIERS.find(t => t.id === tierId);
+        if (tier) {
+            setPtoRatePerHour(tier.ptoRatePerHour);
+            setSickRatePerHour(tier.sickRatePerHour);
+        }
+    };
+
     const handleDateSelect = (date) => {
         const dateStr = formatDate(date);
         if (!dateStr) return;
@@ -211,7 +336,13 @@ export default function App() {
                 return dateA.getTime() - dateB.getTime();
             });
     }, [selectedDates]);
-    
+
+    // The PTO max balance cap depends on the selected tenure tier.
+    const maxPto = useMemo(() => {
+        const tier = ACCRUAL_TIERS.find(t => t.id === selectedTier);
+        return tier?.maxPto ?? 210;
+    }, [selectedTier]);
+
     const projections = useMemo(() => {
         const pto = parseFloat(currentPto);
         const sick = parseFloat(currentSick);
@@ -223,7 +354,7 @@ export default function App() {
             return results;
         }
         
-        const MAX_PTO = 210;
+        const MAX_PTO = maxPto;
         const MAX_SICK = 80;
 
         let runningPto = pto;
@@ -234,7 +365,7 @@ export default function App() {
             const futureDate = parseDateStr(dateStr);
             if (!futureDate) continue; 
 
-            const workdays = calculateWorkdays(lastDate, futureDate, holidays2025);
+            const workdays = calculateWorkdays(lastDate, futureDate, holidaySet);
             const hoursWorked = workdays * 8;
 
             runningPto += hoursWorked * ptoRate;
@@ -248,18 +379,19 @@ export default function App() {
             }
             
             const vacationHoursToDeduct = 8;
-            
-            if (runningPto - vacationHoursToDeduct >= -40) {
-                runningPto -= vacationHoursToDeduct;
+
+            // Sick time is drained first, then PTO covers any remaining hours.
+            if (runningSick - vacationHoursToDeduct >= -16) {
+                runningSick -= vacationHoursToDeduct;
             } else {
-                const ptoAvailable = runningPto + 40;
+                const sickAvailable = runningSick + 16;
                 
-                if (ptoAvailable > 0) {
-                    runningPto -= ptoAvailable;
+                if (sickAvailable > 0) {
+                    runningSick -= sickAvailable;
                 }
                 
-                const sickHoursNeeded = vacationHoursToDeduct - ptoAvailable;
-                runningSick -= sickHoursNeeded;
+                const ptoHoursNeeded = vacationHoursToDeduct - sickAvailable;
+                runningPto -= ptoHoursNeeded;
             }
 
             results.set(dateStr, { pto: runningPto, sick: runningSick });
@@ -269,7 +401,7 @@ export default function App() {
         }
 
         return results;
-    }, [currentPto, currentSick, ptoRatePerHour, sickRatePerHour, sortedSelectedDates, today]);
+    }, [currentPto, currentSick, ptoRatePerHour, sickRatePerHour, sortedSelectedDates, today, holidaySet, maxPto]);
 
 
     // --- Render ---
@@ -284,34 +416,40 @@ export default function App() {
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                     {/* Inputs Column */}
                     <div className="lg:col-span-1 bg-white p-6 rounded-lg shadow-lg">
-                        <h2 className="text-2xl font-semibold mb-6 border-b pb-3">Current Balances & Accrual</h2>
+                        <h2 className="text-2xl font-semibold mb-6 border-b pb-3">Time Off Balance</h2>
                         <div className="space-y-6">
                             <div>
-                                <label htmlFor="current-pto" className="block text-sm font-medium text-gray-700 mb-1">Current PTO (hours)</label>
+                                <label htmlFor="tenure-select" className="block text-sm font-medium text-gray-700 mb-1">Years at PunchThrough</label>
+                                <select id="tenure-select" value={selectedTier} onChange={handleAccrualTierChange} className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 bg-white">
+                                    {ACCRUAL_TIERS.map(tier => (
+                                        <option key={tier.id} value={tier.id}>{tier.label}</option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div>
+                                <label htmlFor="current-pto" className="block text-sm font-medium text-gray-700 mb-1">Current PTO Balance (hours)</label>
                                 <input type="text" inputMode="decimal" id="current-pto" value={currentPto} onChange={e => setCurrentPto(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"/>
                             </div>
                             <div>
-                                <label htmlFor="current-sick" className="block text-sm font-medium text-gray-700 mb-1">Current Sick Time (hours)</label>
+                                <label htmlFor="current-sick" className="block text-sm font-medium text-gray-700 mb-1">Current Sick Balance (hours)</label>
                                 <input type="text" inputMode="decimal" id="current-sick" value={currentSick} onChange={e => setCurrentSick(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"/>
-                            </div>
-                            <div>
-                                <label htmlFor="pto-accrual-rate" className="block text-sm font-medium text-gray-700 mb-1">PTO Accrual (per hour worked)</label>
-                                <input type="text" inputMode="decimal" id="pto-accrual-rate" value={ptoRatePerHour} onChange={e => setPtoRatePerHour(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"/>
-                            </div>
-                             <div>
-                                <label htmlFor="sick-accrual-rate" className="block text-sm font-medium text-gray-700 mb-1">Sick Accrual (per hour worked)</label>
-                                <input type="text" inputMode="decimal" id="sick-accrual-rate" value={sickRatePerHour} onChange={e => setSickRatePerHour(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"/>
                             </div>
                             <div className="text-xs text-gray-500 pt-2 border-t">
                                 <p className="font-bold">Rules:</p>
                                 <p>• Assumes an 8-hour workday, Mon-Fri.</p>
-                                <p>• Max PTO balance: 210 hours.</p>
+                                <p>• PTO Accrual: {ptoRatePerHour} hrs per hour worked.</p>
+                                <p>• Sick Accrual: {sickRatePerHour} hrs per hour worked.</p>
+                                <p>• Max PTO balance: {maxPto} hours.</p>
                                 <p>• Max Sick balance: 80 hours.</p>
                                 <p>• PTO can go down to -40 hours.</p>
                                 <p>• Sick time can go down to -16 hours.</p>
-                                <p>• Vacation uses PTO first, then Sick time.</p>
-                                <p className="font-bold mt-2">2025 Holidays:</p>
-                                <p className="leading-relaxed">{formattedHolidays}</p>
+                                <p>• Vacation uses Sick time first, then PTO.</p>
+                                <p className="font-bold mt-2">Holidays:</p>
+                                <div className="leading-relaxed">
+                                    {holidayList.map(h => (
+                                        <p key={h.name}>{h.name}: {h.label}</p>
+                                    ))}
+                                </div>
 
                             </div>
                         </div>
@@ -326,7 +464,7 @@ export default function App() {
                             year={year}
                             setMonth={setMonth}
                             setYear={setYear}
-                            holidays={holidays2025}
+                            holidays={holidaySet}
                         />
                         
                         <div className="bg-white p-6 rounded-lg shadow-lg">
